@@ -7,6 +7,8 @@ import Navbar from './components/Navbar';
 import ChatModal from './components/ChatModal';
 import AuthPortal from './components/AuthPortal';
 import { supabase } from './supabaseClient';
+import { translations } from './translations';
+// import { translations } from './lib/translations';
 
 // Helper to map DB order to UI Order type
 const mapOrder = (dbOrder: any): Order => ({
@@ -44,6 +46,7 @@ const App: React.FC = () => {
   const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
   const [isLoading, setIsLoading] = useState(true);
+  const [lang, setLang] = useState<'en' | 'ar'>('en');
 
   const toggleTheme = () => {
     const newTheme = !isDarkMode;
@@ -55,6 +58,13 @@ const App: React.FC = () => {
       document.documentElement.classList.remove('dark');
       localStorage.theme = 'light';
     }
+  };
+
+  const toggleLanguage = () => {
+    const newLang = lang === 'en' ? 'ar' : 'en';
+    setLang(newLang);
+    document.documentElement.dir = newLang === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.lang = newLang;
   };
 
   // Define data fetching logic outside useEffect so it can be called manually
@@ -421,6 +431,8 @@ const App: React.FC = () => {
     setCurrentUser(null);
   };
 
+  const t = translations[lang];
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -430,7 +442,7 @@ const App: React.FC = () => {
   }
 
   if (!currentUser) {
-    return <AuthPortal onAuth={handleAuth} existingUsers={users} onSignup={handleSignup} isDarkMode={isDarkMode} onToggleTheme={toggleTheme} />;
+    return <AuthPortal onAuth={handleAuth} existingUsers={users} onSignup={handleSignup} isDarkMode={isDarkMode} onToggleTheme={toggleTheme} t={t} onToggleLanguage={toggleLanguage} />;
   }
 
   const activeChatOrder = orders.find(o => o.id === activeChatOrderId);
@@ -443,6 +455,8 @@ const App: React.FC = () => {
         wallet={currentUser.wallet || { balance: 0, escrowHeld: 0, transactions: [] }}
         isDarkMode={isDarkMode}
         onToggleTheme={toggleTheme}
+        t={t}
+        onToggleLanguage={toggleLanguage}
       />
       
       <main className="flex-grow container mx-auto px-4 py-8">
@@ -456,6 +470,7 @@ const App: React.FC = () => {
             onOpenChat={(id) => setActiveChatOrderId(id)}
             onUpdateStatus={updateOrderStatus}
             onReview={submitReview}
+            t={t}
           />
         ) : (
           <DeliveryPortal 
@@ -467,6 +482,7 @@ const App: React.FC = () => {
             onUpdateStatus={updateOrderStatus}
             onOpenChat={(id) => setActiveChatOrderId(id)}
             onReview={submitReview}
+            t={t}
           />
         )}
       </main>
@@ -477,12 +493,13 @@ const App: React.FC = () => {
           currentUserId={currentUser.id}
           onClose={() => setActiveChatOrderId(null)}
           onSend={(text) => sendMessage(activeChatOrder.id, text)}
+          t={t}
         />
       )}
       
       <footer className="bg-white dark:bg-slate-900 border-t border-gray-200 dark:border-slate-800 py-6 mt-12 transition-colors">
         <div className="container mx-auto px-4 text-center text-gray-500 dark:text-slate-400 text-sm">
-          &copy; 2024 SwiftEscrow Delivery. Securely connecting stores and riders.
+          &copy; 2024 {t.appName} Delivery. {t.secureDeliveryMarketplace}.
         </div>
       </footer>
     </div>

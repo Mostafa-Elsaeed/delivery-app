@@ -5,26 +5,27 @@ interface ReviewSectionProps {
   onReview: (rating: number, comment: string) => void;
   alreadyReviewed: boolean;
   targetName: string;
+  t: any;
 }
 
-const ReviewSection: React.FC<ReviewSectionProps> = ({ onReview, alreadyReviewed, targetName }) => {
+const ReviewSection: React.FC<ReviewSectionProps> = ({ onReview, alreadyReviewed, targetName, t }) => {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
 
   if (alreadyReviewed) {
     return (
-      <div className="bg-emerald-50 dark:bg-emerald-900/10 p-4 rounded-2xl border border-emerald-100 dark:border-emerald-800 flex items-center justify-center space-x-2">
+      <div className="bg-emerald-50 dark:bg-emerald-900/10 p-4 rounded-2xl border border-emerald-100 dark:border-emerald-800 flex items-center justify-center space-x-2 rtl:space-x-reverse">
         <svg className="w-5 h-5 text-emerald-600 dark:text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
         </svg>
-        <p className="text-xs font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-widest">Review Submitted</p>
+        <p className="text-xs font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-widest">{t.reviewSubmitted}</p>
       </div>
     );
   }
 
   return (
     <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 space-y-4">
-      <h4 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-tight">Review {targetName}</h4>
+      <h4 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-tight">{t.review} {targetName}</h4>
       <div className="flex items-center space-x-2">
         {[1, 2, 3, 4, 5].map((star) => (
           <button
@@ -41,7 +42,7 @@ const ReviewSection: React.FC<ReviewSectionProps> = ({ onReview, alreadyReviewed
       <textarea
         value={comment}
         onChange={(e) => setComment(e.target.value)}
-        placeholder="How was the experience?"
+        placeholder={t.experiencePlaceholder}
         className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white"
         rows={2}
       />
@@ -49,7 +50,7 @@ const ReviewSection: React.FC<ReviewSectionProps> = ({ onReview, alreadyReviewed
         onClick={() => onReview(rating, comment)}
         className="w-full py-3 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 dark:shadow-indigo-900/30"
       >
-        Submit Review
+        {t.submitReview}
       </button>
     </div>
   );
