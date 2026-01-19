@@ -194,6 +194,22 @@ const App: React.FC = () => {
   const placeBid = async (orderId: string, amount: number) => {
     if (!currentUser) return;
     
+    // Optimistic Update: Show bid immediately
+    setOrders(prev => prev.map(o => {
+      if (o.id === orderId) {
+        const otherBids = o.bids.filter(b => b.deliveryGuyId !== currentUser.id);
+        const newBid: Bid = {
+          id: `temp-${Date.now()}`,
+          deliveryGuyId: currentUser.id,
+          deliveryGuyName: currentUser.name,
+          amount,
+          timestamp: Date.now()
+        };
+        return { ...o, bids: [...otherBids, newBid] };
+      }
+      return o;
+    }));
+
     // Check if bid exists in current state
     const existingBid = orders.find(o => o.id === orderId)?.bids.find(b => b.deliveryGuyId === currentUser.id);
 
@@ -210,10 +226,25 @@ const App: React.FC = () => {
         proposedFee: amount
       });
     }
+    fetchAndSetData();
   };
 
   const selectBidder = async (orderId: string, bidId: string) => {
-    const order = orders.find(o => o.id === orderId);
+    // Optimistic Update: Change status immediately
+    setOrders(prev => prev.map(o => {
+      if (o.id === orderId) {
+        const bid = o.bids.find(b => b.id === bidId);
+        return { 
+          ...o, 
+          chosenBidId: bidId, 
+          deliveryGuyId: bid?.deliveryGuyId, 
+          status: OrderStatus.AWAITING_ESCROW 
+        };
+      }
+      return o;
+    }));
+
+    const order = orders.find(o => o.id === orderId); // Note: this gets stale state, but ID lookup is safe
     const bid = order?.bids.find(b => b.id === bidId);
     if (!bid) return;
 
@@ -222,6 +253,7 @@ const App: React.FC = () => {
       deliveryGuyId: bid.deliveryGuyId,
       status: OrderStatus.AWAITING_ESCROW
     }).eq('id', orderId);
+    fetchAndSetData();
   };
 
   const payStoreEscrow = async (orderId: string) => {
@@ -233,6 +265,28 @@ const App: React.FC = () => {
 
     if (!currentUser.wallet || currentUser.wallet.balance < fee) return alert("Insufficient balance or wallet not loaded.");
 
+    // Optimistic Wallet Update
+    setCurrentUser(prev => {
+      if (!prev || !prev.wallet) return prev;
+      return {
+        ...prev,
+        wallet: {
+          ...prev.wallet,
+          balance: prev.wallet.balance - fee,
+          escrowHeld: prev.wallet.escrowHeld + fee
+        }
+      };
+    });
+
+    // Optimistic Order Update
+    setOrders(prev => prev.map(o => {
+      if (o.id === orderId) {
+        const newStatus = o.deliveryEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
+        return { ...o, storeEscrowPaid: true, status: newStatus };
+      }
+      return o;
+    }));
+
     // Update Wallet
     await supabase.from('wallets').update({
       balance: currentUser.wallet.balance - fee,
@@ -242,6 +296,8 @@ const App: React.FC = () => {
     // Update Order
     const newStatus = order.deliveryEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
     await supabase.from('orders').update({ storeDeposited: true, status: newStatus }).eq('id', orderId);
+    
+    fetchAndSetData();
   };
 
   const payDeliveryEscrow = async (orderId: string) => {
@@ -250,6 +306,28 @@ const App: React.FC = () => {
     if (!order) return;
 
     if (!currentUser.wallet || currentUser.wallet.balance < order.productPrice) return alert("Insufficient balance or wallet not loaded.");
+
+    // Optimistic Wallet Update
+    setCurrentUser(prev => {
+      if (!prev || !prev.wallet) return prev;
+      return {
+        ...prev,
+        wallet: {
+          ...prev.wallet,
+          balance: prev.wallet.balance - order.productPrice,
+          escrowHeld: prev.wallet.escrowHeld + order.productPrice
+        }
+      };
+    });
+
+    // Optimistic Order Update
+    setOrders(prev => prev.map(o => {
+      if (o.id === orderId) {
+        const newStatus = o.storeEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
+        return { ...o, deliveryEscrowPaid: true, status: newStatus };
+      }
+      return o;
+    }));
 
     // Update Wallet
     await supabase.from('wallets').update({
@@ -260,6 +338,8 @@ const App: React.FC = () => {
     // Update Order
     const newStatus = order.storeEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
     await supabase.from('orders').update({ riderDeposited: true, status: newStatus }).eq('id', orderId);
+
+    fetchAndSetData();
   };
 
   const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
