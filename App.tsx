@@ -120,6 +120,14 @@ const App: React.FC = () => {
           baseOrder.riderReviewed = (reviewsData || []).some((r: any) => r.orderId === dbOrder.id && r.reviewerId === dbOrder.deliveryGuyId);
           return baseOrder;
         });
+
+        // Self-healing: Fix any orders that are stuck in AWAITING_ESCROW but have both deposits
+        mappedOrders.forEach(async (o) => {
+          if (o.status === OrderStatus.AWAITING_ESCROW && o.storeEscrowPaid && o.deliveryEscrowPaid) {
+            await supabase.from('orders').update({ status: OrderStatus.READY_FOR_PICKUP }).eq('id', o.id);
+          }
+        });
+
         setOrders(mappedOrders);
       }
   }, []);
@@ -293,8 +301,11 @@ const App: React.FC = () => {
       escrow: currentUser.wallet.escrowHeld + fee,
     }).eq('user_id', currentUser.id);
 
-    // Update Order
-    const newStatus = order.deliveryEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
+    // Update Order - Fetch fresh data first to ensure we know if rider has deposited
+    const { data: freshOrder } = await supabase.from('orders').select('riderDeposited').eq('id', orderId).single();
+    const isRiderPaid = freshOrder ? freshOrder.riderDeposited : order.deliveryEscrowPaid;
+    
+    const newStatus = isRiderPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
     await supabase.from('orders').update({ storeDeposited: true, status: newStatus }).eq('id', orderId);
     
     fetchAndSetData();
@@ -335,8 +346,11 @@ const App: React.FC = () => {
       escrow: currentUser.wallet.escrowHeld + order.productPrice,
     }).eq('user_id', currentUser.id);
 
-    // Update Order
-    const newStatus = order.storeEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
+    // Update Order - Fetch fresh data first to ensure we know if store has deposited
+    const { data: freshOrder } = await supabase.from('orders').select('storeDeposited').eq('id', orderId).single();
+    const isStorePaid = freshOrder ? freshOrder.storeDeposited : order.storeEscrowPaid;
+
+    const newStatus = isStorePaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
     await supabase.from('orders').update({ riderDeposited: true, status: newStatus }).eq('id', orderId);
 
     fetchAndSetData();
