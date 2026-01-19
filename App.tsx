@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { UserRole, Order, OrderStatus, Bid, User, Message, Review } from './types';
 import StorePortal from './components/StorePortal';
 import DeliveryPortal from './components/DeliveryPortal';
@@ -8,41 +8,41 @@ import ChatModal from './components/ChatModal';
 import AuthPortal from './components/AuthPortal';
 import { supabase } from './supabaseClient';
 
+// Helper to map DB order to UI Order type
+const mapOrder = (dbOrder: any): Order => ({
+  id: dbOrder.id,
+  storeId: dbOrder.storeId,
+  storeName: dbOrder.storeName,
+  productName: dbOrder.productName,
+  productPrice: Number(dbOrder.productPrice),
+  deliveryFeeOffer: Number(dbOrder.suggestedDeliveryFee),
+  deliveryAddress: dbOrder.destination,
+  clientName: dbOrder.clientName || '',
+  clientPhone: dbOrder.clientPhone || '',
+  status: dbOrder.status as OrderStatus,
+  bids: (dbOrder.bids || []).map((b: any) => ({
+    id: b.id,
+    deliveryGuyId: b.deliveryGuyId,
+    deliveryGuyName: b.deliveryGuyName,
+    amount: Number(b.proposedFee),
+    timestamp: new Date(b.timestamp).getTime()
+  })),
+  messages: [], // Messages table not provided, keeping empty
+  selectedBidId: dbOrder.chosenBidId,
+  deliveryGuyId: dbOrder.deliveryGuyId,
+  storeEscrowPaid: dbOrder.storeDeposited,
+  deliveryEscrowPaid: dbOrder.riderDeposited,
+  createdAt: new Date(dbOrder.created_at).getTime(),
+  storeReviewed: false,
+  riderReviewed: false
+});
+
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
-
-  // Helper to map DB order to UI Order type
-  const mapOrder = (dbOrder: any): Order => ({
-    id: dbOrder.id,
-    storeId: dbOrder.storeId,
-    storeName: dbOrder.storeName,
-    productName: dbOrder.productName,
-    productPrice: Number(dbOrder.productPrice),
-    deliveryFeeOffer: Number(dbOrder.suggestedDeliveryFee),
-    deliveryAddress: dbOrder.destination,
-    clientName: dbOrder.clientName || '',
-    clientPhone: dbOrder.clientPhone || '',
-    status: dbOrder.status as OrderStatus,
-    bids: (dbOrder.bids || []).map((b: any) => ({
-      id: b.id,
-      deliveryGuyId: b.deliveryGuyId,
-      deliveryGuyName: b.deliveryGuyName,
-      amount: Number(b.proposedFee),
-      timestamp: new Date(b.timestamp).getTime()
-    })),
-    messages: [], // Messages table not provided, keeping empty
-    selectedBidId: dbOrder.chosenBidId,
-    deliveryGuyId: dbOrder.deliveryGuyId,
-    storeEscrowPaid: dbOrder.storeDeposited,
-    deliveryEscrowPaid: dbOrder.riderDeposited,
-    createdAt: new Date(dbOrder.created_at).getTime(),
-    storeReviewed: false,
-    riderReviewed: false
-  });
 
   const toggleTheme = () => {
     const newTheme = !isDarkMode;
@@ -81,9 +81,8 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fetch Orders and Subscribe to changes
-  useEffect(() => {
-    const fetchAndSetData = async () => {
+  // Define data fetching logic outside useEffect so it can be called manually
+  const fetchAndSetData = useCallback(async () => {
       const [{ data: ordersData }, { data: reviewsData }, { data: messagesData }] = await Promise.all([
         supabase.from('orders').select(`*, bids(*)`).order('created_at', { ascending: false }),
         supabase.from('reviews').select('*'),
@@ -123,8 +122,10 @@ const App: React.FC = () => {
         });
         setOrders(mappedOrders);
       }
-    };
+  }, []);
 
+  // Fetch Orders and Subscribe to changes
+  useEffect(() => {
     fetchAndSetData();
 
     const channel = supabase.channel('public:data')
@@ -138,7 +139,7 @@ const App: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [fetchAndSetData]);
 
   // Sync Wallet from DB
   useEffect(() => {
@@ -187,6 +188,7 @@ const App: React.FC = () => {
       clientPhone,
       status: OrderStatus.BIDDING
     });
+    fetchAndSetData();
   };
 
   const placeBid = async (orderId: string, amount: number) => {
