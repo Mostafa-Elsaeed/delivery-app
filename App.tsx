@@ -43,6 +43,7 @@ const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
+  const [isLoading, setIsLoading] = useState(true);
 
   const toggleTheme = () => {
     const newTheme = !isDarkMode;
@@ -55,31 +56,6 @@ const App: React.FC = () => {
       localStorage.theme = 'light';
     }
   };
-
-  // Initialize Supabase Auth Listener
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setCurrentUser(prev => {
-          // If the user is already loaded and matches the session, preserve the existing state (including wallet)
-          if (prev?.id === session.user.id) return prev;
-
-          return {
-            id: session.user.id,
-            email: session.user.email!,
-            password: '', // Managed by Supabase
-            name: session.user.user_metadata.name || session.user.email?.split('@')[0] || 'User',
-            role: (session.user.user_metadata.role as UserRole) || UserRole.DELIVERY,
-            reviews: []
-          };
-        });
-      } else {
-        setCurrentUser(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   // Define data fetching logic outside useEffect so it can be called manually
   const fetchAndSetData = useCallback(async () => {
@@ -131,6 +107,41 @@ const App: React.FC = () => {
         setOrders(mappedOrders);
       }
   }, []);
+
+  // Initialize Supabase Auth Listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        fetchAndSetData();
+      }
+      setIsLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (_event === 'SIGNED_IN') fetchAndSetData();
+
+      if (session?.user) {
+        setCurrentUser(prev => {
+          // If the user is already loaded and matches the session, preserve the existing state (including wallet)
+          if (prev?.id === session.user.id) return prev;
+
+          return {
+            id: session.user.id,
+            email: session.user.email!,
+            password: '', // Managed by Supabase
+            name: session.user.user_metadata.name || session.user.email?.split('@')[0] || 'User',
+            role: (session.user.user_metadata.role as UserRole) || UserRole.DELIVERY,
+            reviews: []
+          };
+        });
+      } else {
+        setCurrentUser(null);
+      }
+      setIsLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchAndSetData]);
 
   // Fetch Orders and Subscribe to changes
   useEffect(() => {
@@ -455,6 +466,14 @@ const App: React.FC = () => {
     await supabase.auth.signOut();
     setCurrentUser(null);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return <AuthPortal onAuth={handleAuth} existingUsers={users} onSignup={handleSignup} isDarkMode={isDarkMode} onToggleTheme={toggleTheme} />;
