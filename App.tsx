@@ -165,21 +165,34 @@ const App: React.FC = () => {
     if (!currentUser?.id) return;
 
     const fetchWallet = async () => {
-      let { data } = await supabase.from('wallets').select('*').eq('user_id', currentUser.id).single();
+      let { data: walletData } = await supabase.from('wallets').select('*').eq('user_id', currentUser.id).single();
       
       // Create wallet if it doesn't exist
-      if (!data) {
+      if (!walletData) {
         const { data: newData } = await supabase.from('wallets').insert({ user_id: currentUser.id }).select().single();
-        data = newData;
+        walletData = newData;
       }
 
-      if (data) {
+      // Fetch transactions history
+      const { data: transactionsData } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('timestamp', { ascending: false });
+
+      if (walletData) {
         setCurrentUser(prev => prev ? ({
           ...prev,
           wallet: {
-            balance: Number(data.balance),
-            escrowHeld: Number(data.escrow),
-            transactions: [] // Transactions table not provided
+            balance: Number(walletData.balance),
+            escrowHeld: Number(walletData.escrow),
+            transactions: transactionsData ? transactionsData.map((t: any) => ({
+              id: t.id,
+              amount: Number(t.amount),
+              type: t.type as 'IN' | 'OUT',
+              description: t.description,
+              timestamp: new Date(t.timestamp).getTime()
+            })) : []
           }
         }) : null);
       }
@@ -189,6 +202,7 @@ const App: React.FC = () => {
 
     const channel = supabase.channel('wallet_updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `user_id=eq.${currentUser.id}` }, fetchWallet)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions', filter: `user_id=eq.${currentUser.id}` }, fetchWallet)
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -213,22 +227,6 @@ const App: React.FC = () => {
   const placeBid = async (orderId: string, amount: number) => {
     if (!currentUser) return;
     
-    // Optimistic Update: Show bid immediately
-    setOrders(prev => prev.map(o => {
-      if (o.id === orderId) {
-        const otherBids = o.bids.filter(b => b.deliveryGuyId !== currentUser.id);
-        const newBid: Bid = {
-          id: `temp-${Date.now()}`,
-          deliveryGuyId: currentUser.id,
-          deliveryGuyName: currentUser.name,
-          amount,
-          timestamp: Date.now()
-        };
-        return { ...o, bids: [...otherBids, newBid] };
-      }
-      return o;
-    }));
-
     // Check if bid exists in current state
     const existingBid = orders.find(o => o.id === orderId)?.bids.find(b => b.deliveryGuyId === currentUser.id);
 
@@ -249,20 +247,6 @@ const App: React.FC = () => {
   };
 
   const selectBidder = async (orderId: string, bidId: string) => {
-    // Optimistic Update: Change status immediately
-    setOrders(prev => prev.map(o => {
-      if (o.id === orderId) {
-        const bid = o.bids.find(b => b.id === bidId);
-        return { 
-          ...o, 
-          chosenBidId: bidId, 
-          deliveryGuyId: bid?.deliveryGuyId, 
-          status: OrderStatus.AWAITING_ESCROW 
-        };
-      }
-      return o;
-    }));
-
     const order = orders.find(o => o.id === orderId); // Note: this gets stale state, but ID lookup is safe
     const bid = order?.bids.find(b => b.id === bidId);
     if (!bid) return;
@@ -284,33 +268,19 @@ const App: React.FC = () => {
 
     if (!currentUser.wallet || currentUser.wallet.balance < fee) return alert("Insufficient balance or wallet not loaded.");
 
-    // Optimistic Wallet Update
-    setCurrentUser(prev => {
-      if (!prev || !prev.wallet) return prev;
-      return {
-        ...prev,
-        wallet: {
-          ...prev.wallet,
-          balance: prev.wallet.balance - fee,
-          escrowHeld: prev.wallet.escrowHeld + fee
-        }
-      };
-    });
-
-    // Optimistic Order Update
-    setOrders(prev => prev.map(o => {
-      if (o.id === orderId) {
-        const newStatus = o.deliveryEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
-        return { ...o, storeEscrowPaid: true, status: newStatus };
-      }
-      return o;
-    }));
-
     // Update Wallet
     await supabase.from('wallets').update({
       balance: currentUser.wallet.balance - fee,
       escrow: currentUser.wallet.escrowHeld + fee,
     }).eq('user_id', currentUser.id);
+
+    // Record Transaction
+    await supabase.from('transactions').insert({
+      user_id: currentUser.id,
+      amount: fee,
+      type: 'OUT',
+      description: `Escrow deposit for ${order.productName}`
+    });
 
     // Update Order - Fetch fresh data first to ensure we know if rider has deposited
     const { data: freshOrder } = await supabase.from('orders').select('riderDeposited').eq('id', orderId).single();
@@ -329,33 +299,19 @@ const App: React.FC = () => {
 
     if (!currentUser.wallet || currentUser.wallet.balance < order.productPrice) return alert("Insufficient balance or wallet not loaded.");
 
-    // Optimistic Wallet Update
-    setCurrentUser(prev => {
-      if (!prev || !prev.wallet) return prev;
-      return {
-        ...prev,
-        wallet: {
-          ...prev.wallet,
-          balance: prev.wallet.balance - order.productPrice,
-          escrowHeld: prev.wallet.escrowHeld + order.productPrice
-        }
-      };
-    });
-
-    // Optimistic Order Update
-    setOrders(prev => prev.map(o => {
-      if (o.id === orderId) {
-        const newStatus = o.storeEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
-        return { ...o, deliveryEscrowPaid: true, status: newStatus };
-      }
-      return o;
-    }));
-
     // Update Wallet
     await supabase.from('wallets').update({
       balance: currentUser.wallet.balance - order.productPrice,
       escrow: currentUser.wallet.escrowHeld + order.productPrice,
     }).eq('user_id', currentUser.id);
+
+    // Record Transaction
+    await supabase.from('transactions').insert({
+      user_id: currentUser.id,
+      amount: order.productPrice,
+      type: 'OUT',
+      description: `Product collateral for ${order.productName}`
+    });
 
     // Update Order - Fetch fresh data first to ensure we know if store has deposited
     const { data: freshOrder } = await supabase.from('orders').select('storeDeposited').eq('id', orderId).single();
@@ -372,9 +328,6 @@ const App: React.FC = () => {
     const currentOrder = orders.find(o => o.id === orderId);
     if (currentOrder?.status === status) return;
 
-    // Optimistic Update for Order Status
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
-
     await supabase.from('orders').update({ status }).eq('id', orderId);
     
     if (status === OrderStatus.COMPLETED) {
@@ -382,21 +335,6 @@ const App: React.FC = () => {
       if (order) {
         const selectedBid = order.bids.find(b => b.id === order.selectedBidId);
         const fee = selectedBid ? selectedBid.amount : order.deliveryFeeOffer;
-
-        // Optimistic Wallet Update for Current User (if Store)
-        if (currentUser && currentUser.id === order.storeId && currentUser.wallet) {
-             setCurrentUser(prev => {
-                if (!prev || !prev.wallet) return prev;
-                return {
-                    ...prev,
-                    wallet: {
-                        ...prev.wallet,
-                        balance: prev.wallet.balance + order.productPrice,
-                        escrowHeld: prev.wallet.escrowHeld - fee
-                    }
-                };
-             });
-        }
 
         // Payout Logic (Note: In production, use RPC/Transactions for safety)
         
@@ -412,6 +350,14 @@ const App: React.FC = () => {
             balance: Number(storeWallet.balance) + order.productPrice,
             escrow: Number(storeWallet.escrow) - fee // Release fee from escrow
           }).eq('user_id', order.storeId);
+
+          // Record Store Transaction
+          await supabase.from('transactions').insert({
+            user_id: order.storeId,
+            amount: order.productPrice,
+            type: 'IN',
+            description: `Product payment for ${order.productName}`
+          });
         }
 
         // Fetch Rider Wallet
@@ -422,6 +368,14 @@ const App: React.FC = () => {
               balance: Number(riderWallet.balance) + fee, // Rider gets Fee. Product Price (collateral) is transferred to Store.
               escrow: Number(riderWallet.escrow) - order.productPrice // Release collateral
             }).eq('user_id', order.deliveryGuyId);
+
+            // Record Rider Transaction
+            await supabase.from('transactions').insert({
+              user_id: order.deliveryGuyId,
+              amount: fee,
+              type: 'IN',
+              description: `Delivery fee payout for ${order.productName}`
+            });
           }
         }
       }
