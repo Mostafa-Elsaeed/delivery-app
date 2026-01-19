@@ -192,6 +192,7 @@ const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ currentUser, orders, us
               ? (storeUser.reviews.reduce((acc, r) => acc + r.rating, 0) / storeUser.reviews.length).toFixed(1)
               : 'New';
              const myBid = order.bids.find(b => b.deliveryGuyId === currentUser.id);
+             const bestBid = order.bids.length > 0 ? Math.min(...order.bids.map(b => b.amount)) : null;
 
              return (
               <div key={order.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-2xl transition-all duration-500 flex flex-col group overflow-hidden">
@@ -254,15 +255,20 @@ const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ currentUser, orders, us
                       </button>
                     </div>
                     {order.bids.length > 0 && (
-                      <div className="flex items-center space-x-2 px-1">
-                        <div className="flex -space-x-3">
-                          {order.bids.slice(0, 3).map(b => (
-                            <div key={b.id} className="w-8 h-8 rounded-full border-4 border-white dark:border-slate-900 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-black text-slate-600 dark:text-slate-400 shadow-sm transition-colors">
-                              {b.deliveryGuyName.charAt(0)}
-                            </div>
-                          ))}
+                      <div className="flex items-center justify-between px-1 mt-2">
+                        <div className="flex items-center space-x-2">
+                          <div className="flex -space-x-3">
+                            {order.bids.slice(0, 3).map(b => (
+                              <div key={b.id} className="w-8 h-8 rounded-full border-4 border-white dark:border-slate-900 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-black text-slate-600 dark:text-slate-400 shadow-sm transition-colors">
+                                {b.deliveryGuyName.charAt(0)}
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-black uppercase tracking-widest transition-colors">{order.bids.length} bids</p>
                         </div>
-                        <p className="text-[10px] text-slate-400 dark:text-slate-500 font-black uppercase tracking-widest transition-colors">{order.bids.length} competitors</p>
+                        {bestBid && (
+                          <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded-lg">Best: ${bestBid.toFixed(2)}</p>
+                        )}
                       </div>
                     )}
                   </div>

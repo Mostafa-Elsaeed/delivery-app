@@ -83,22 +83,58 @@ const App: React.FC = () => {
 
   // Fetch Orders and Subscribe to changes
   useEffect(() => {
-    const fetchOrders = async () => {
-      const { data } = await supabase
-        .from('orders')
-        .select(`*, bids(*)`)
-        .order('created_at', { ascending: false });
-      
-      if (data) {
-        setOrders(data.map(mapOrder));
+    const fetchAndSetData = async () => {
+      const [{ data: ordersData }, { data: reviewsData }, { data: messagesData }] = await Promise.all([
+        supabase.from('orders').select(`*, bids(*)`).order('created_at', { ascending: false }),
+        supabase.from('reviews').select('*'),
+        supabase.from('messages').select('*').order('timestamp', { ascending: true })
+      ]);
+
+      // Build Users map for ratings (calculating stars based on fetched reviews)
+      const userMap = new Map<string, User>();
+      const ensureUser = (id: string) => {
+        if (!userMap.has(id)) {
+          userMap.set(id, {
+            id, email: '', name: '', role: UserRole.DELIVERY, reviews: [],
+            wallet: { balance: 0, escrowHeld: 0, transactions: [] }
+          });
+        }
+      };
+
+      reviewsData?.forEach((r: any) => {
+        ensureUser(r.targetUserId);
+        userMap.get(r.targetUserId)!.reviews.push({
+          id: r.id, reviewerId: r.reviewerId, reviewerName: r.reviewerName,
+          rating: r.rating, comment: r.comment, timestamp: new Date(r.timestamp).getTime()
+        });
+      });
+      setUsers(Array.from(userMap.values()));
+
+      if (ordersData) {
+        const mappedOrders = ordersData.map(dbOrder => {
+          const baseOrder = mapOrder(dbOrder);
+          // Attach real-time messages
+          baseOrder.messages = messagesData?.filter((m: any) => m.orderId === dbOrder.id).map((m: any) => ({
+            id: m.id, senderId: m.senderId, text: m.text, timestamp: new Date(m.timestamp).getTime()
+          })) || [];
+          baseOrder.storeReviewed = (reviewsData || []).some((r: any) => r.orderId === dbOrder.id && r.reviewerId === dbOrder.storeId);
+          baseOrder.riderReviewed = (reviewsData || []).some((r: any) => r.orderId === dbOrder.id && r.reviewerId === dbOrder.deliveryGuyId);
+          return baseOrder;
+        });
+        setOrders(mappedOrders);
       }
     };
 
-    fetchOrders();
+    fetchAndSetData();
 
     const channel = supabase.channel('public:data')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOrders)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bids' }, fetchOrders)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchAndSetData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bids' }, (payload) => {
+        console.log('Realtime Bid Update:', payload);
+        fetchAndSetData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reviews' }, fetchAndSetData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, fetchAndSetData)
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -275,41 +311,18 @@ const App: React.FC = () => {
       rating,
       comment
     });
-
-    const newReview: Review = {
-      id: Math.random().toString(36).substr(2, 9),
-      reviewerId: currentUser.id,
-      reviewerName: currentUser.name,
-      rating,
-      comment,
-      timestamp: Date.now()
-    };
-
-    setUsers(prev => prev.map(u => {
-      if (u.id === targetUserId) {
-        return { ...u, reviews: [newReview, ...u.reviews] };
-      }
-      return u;
-    }));
-
-    setOrders(prev => prev.map(o => {
-      if (o.id === orderId) {
-        if (currentUser.role === UserRole.STORE) return { ...o, storeReviewed: true };
-        return { ...o, riderReviewed: true };
-      }
-      return o;
-    }));
+    // The local state updates (setUsers, setOrders) are removed.
+    // The realtime subscription on the 'reviews' table will trigger a data refetch
+    // and update the UI automatically with the correct "reviewed" status.
   };
 
-  const sendMessage = (orderId: string, text: string) => {
+  const sendMessage = async (orderId: string, text: string) => {
     if (!currentUser) return;
-    const newMessage: Message = {
-      id: Math.random().toString(36).substr(2, 9),
+    await supabase.from('messages').insert({
+      orderId,
       senderId: currentUser.id,
-      text,
-      timestamp: Date.now()
-    };
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, messages: [...o.messages, newMessage] } : o));
+      text
+    });
   };
 
   const handleAuth = (user: User) => {
