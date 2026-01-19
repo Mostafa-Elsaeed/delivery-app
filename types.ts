@@ -1,16 +1,15 @@
-
 export enum OrderStatus {
-  BIDDING = 'BIDDING',
-  AWAITING_ESCROW = 'AWAITING_ESCROW',
-  READY_FOR_PICKUP = 'READY_FOR_PICKUP',
-  IN_TRANSIT = 'IN_TRANSIT',
-  DELIVERED = 'DELIVERED',
-  COMPLETED = 'COMPLETED'
+  BIDDING = "BIDDING",
+  AWAITING_ESCROW = "AWAITING_ESCROW",
+  READY_FOR_PICKUP = "READY_FOR_PICKUP",
+  IN_TRANSIT = "IN_TRANSIT",
+  DELIVERED = "DELIVERED",
+  COMPLETED = "COMPLETED",
 }
 
 export enum UserRole {
-  STORE = 'STORE',
-  DELIVERY = 'DELIVERY'
+  STORE = "STORE",
+  DELIVERY = "DELIVERY",
 }
 
 export interface Review {
@@ -25,7 +24,7 @@ export interface Review {
 export interface Transaction {
   id: string;
   amount: number;
-  type: 'IN' | 'OUT';
+  type: "IN" | "OUT";
   description: string;
   timestamp: number;
 }
@@ -42,7 +41,7 @@ export interface User {
   password?: string;
   name: string;
   role: UserRole;
-  wallet: Wallet;
+  wallet?: Wallet;
   reviews: Review[];
 }
 

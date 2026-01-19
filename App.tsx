@@ -15,6 +15,35 @@ const App: React.FC = () => {
   const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
 
+  // Helper to map DB order to UI Order type
+  const mapOrder = (dbOrder: any): Order => ({
+    id: dbOrder.id,
+    storeId: dbOrder.storeId,
+    storeName: dbOrder.storeName,
+    productName: dbOrder.productName,
+    productPrice: Number(dbOrder.productPrice),
+    deliveryFeeOffer: Number(dbOrder.suggestedDeliveryFee),
+    deliveryAddress: dbOrder.destination,
+    clientName: dbOrder.clientName || '',
+    clientPhone: dbOrder.clientPhone || '',
+    status: dbOrder.status as OrderStatus,
+    bids: (dbOrder.bids || []).map((b: any) => ({
+      id: b.id,
+      deliveryGuyId: b.deliveryGuyId,
+      deliveryGuyName: b.deliveryGuyName,
+      amount: Number(b.proposedFee),
+      timestamp: new Date(b.timestamp).getTime()
+    })),
+    messages: [], // Messages table not provided, keeping empty
+    selectedBidId: dbOrder.chosenBidId,
+    deliveryGuyId: dbOrder.deliveryGuyId,
+    storeEscrowPaid: dbOrder.storeDeposited,
+    deliveryEscrowPaid: dbOrder.riderDeposited,
+    createdAt: new Date(dbOrder.created_at).getTime(),
+    storeReviewed: false,
+    riderReviewed: false
+  });
+
   const toggleTheme = () => {
     const newTheme = !isDarkMode;
     setIsDarkMode(newTheme);
@@ -27,39 +56,22 @@ const App: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    if (currentUser) {
-      const updatedUser = users.find(u => u.id === currentUser.id);
-      if (updatedUser) setCurrentUser(updatedUser);
-    }
-  }, [users, currentUser?.id]);
-
   // Initialize Supabase Auth Listener
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setCurrentUser({
-          id: session.user.id,
-          email: session.user.email!,
-          password: '', // Managed by Supabase
-          name: session.user.user_metadata.name || session.user.email?.split('@')[0] || 'User',
-          role: (session.user.user_metadata.role as UserRole) || UserRole.DELIVERY,
-          wallet: { balance: 0, escrowHeld: 0, transactions: [] },
-          reviews: []
-        });
-      }
-    });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
-        setCurrentUser({
-          id: session.user.id,
-          email: session.user.email!,
-          password: '', // Managed by Supabase
-          name: session.user.user_metadata.name || session.user.email?.split('@')[0] || 'User',
-          role: (session.user.user_metadata.role as UserRole) || UserRole.DELIVERY,
-          wallet: { balance: 0, escrowHeld: 0, transactions: [] },
-          reviews: []
+        setCurrentUser(prev => {
+          // If the user is already loaded and matches the session, preserve the existing state (including wallet)
+          if (prev?.id === session.user.id) return prev;
+
+          return {
+            id: session.user.id,
+            email: session.user.email!,
+            password: '', // Managed by Supabase
+            name: session.user.user_metadata.name || session.user.email?.split('@')[0] || 'User',
+            role: (session.user.user_metadata.role as UserRole) || UserRole.DELIVERY,
+            reviews: []
+          };
         });
       } else {
         setCurrentUser(null);
@@ -69,128 +81,151 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []);
 
-  const updateWallet = (userId: string, amount: number, type: 'IN' | 'OUT', description: string, escrowChange: number = 0) => {
-    setUsers(prev => prev.map(u => {
-      if (u.id === userId) {
-        return {
-          ...u,
-          wallet: {
-            ...u.wallet,
-            balance: u.wallet.balance + (type === 'IN' ? amount : -amount),
-            escrowHeld: u.wallet.escrowHeld + escrowChange,
-            transactions: [{
-              id: Math.random().toString(36).substr(2, 9),
-              amount,
-              type,
-              description,
-              timestamp: Date.now()
-            }, ...u.wallet.transactions]
-          }
-        };
+  // Fetch Orders and Subscribe to changes
+  useEffect(() => {
+    const fetchOrders = async () => {
+      const { data } = await supabase
+        .from('orders')
+        .select(`*, bids(*)`)
+        .order('created_at', { ascending: false });
+      
+      if (data) {
+        setOrders(data.map(mapOrder));
       }
-      return u;
-    }));
-  };
+    };
 
-  const createOrder = (productName: string, productPrice: number, deliveryFee: number, deliveryAddress: string, clientName: string, clientPhone: string) => {
+    fetchOrders();
+
+    const channel = supabase.channel('public:data')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOrders)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bids' }, fetchOrders)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  // Sync Wallet from DB
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const fetchWallet = async () => {
+      let { data } = await supabase.from('wallets').select('*').eq('user_id', currentUser.id).single();
+      
+      // Create wallet if it doesn't exist
+      if (!data) {
+        const { data: newData } = await supabase.from('wallets').insert({ user_id: currentUser.id }).select().single();
+        data = newData;
+      }
+
+      if (data) {
+        setCurrentUser(prev => prev ? ({
+          ...prev,
+          wallet: {
+            balance: Number(data.balance),
+            escrowHeld: Number(data.escrow),
+            transactions: [] // Transactions table not provided
+          }
+        }) : null);
+      }
+    };
+
+    fetchWallet();
+
+    const channel = supabase.channel('wallet_updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `user_id=eq.${currentUser.id}` }, fetchWallet)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser?.id]);
+
+  const createOrder = async (productName: string, productPrice: number, deliveryFee: number, deliveryAddress: string, clientName: string, clientPhone: string) => {
     if (!currentUser) return;
-    const newOrder: Order = {
-      id: `ord_${Math.random().toString(36).substr(2, 9)}`,
+    await supabase.from('orders').insert({
       storeId: currentUser.id,
       storeName: currentUser.name,
       productName,
       productPrice,
-      deliveryFeeOffer: deliveryFee,
-      deliveryAddress,
+      suggestedDeliveryFee: deliveryFee,
+      destination: deliveryAddress,
       clientName,
       clientPhone,
-      status: OrderStatus.BIDDING,
-      bids: [],
-      messages: [],
-      storeEscrowPaid: false,
-      deliveryEscrowPaid: false,
-      createdAt: Date.now(),
-      storeReviewed: false,
-      riderReviewed: false
-    };
-    setOrders([newOrder, ...orders]);
+      status: OrderStatus.BIDDING
+    });
   };
 
-  const placeBid = (orderId: string, amount: number) => {
+  const placeBid = async (orderId: string, amount: number) => {
     if (!currentUser) return;
-    setOrders(prev => prev.map(order => {
-      if (order.id === orderId) {
-        const newBid: Bid = {
-          id: `bid_${Math.random().toString(36).substr(2, 9)}`,
-          deliveryGuyId: currentUser.id,
-          deliveryGuyName: currentUser.name,
-          amount,
-          timestamp: Date.now()
-        };
-        return { ...order, bids: [...order.bids, newBid] };
-      }
-      return order;
-    }));
+    
+    // Check if bid exists in current state
+    const existingBid = orders.find(o => o.id === orderId)?.bids.find(b => b.deliveryGuyId === currentUser.id);
+
+    if (existingBid) {
+      await supabase.from('bids').update({
+        proposedFee: amount,
+        timestamp: new Date().toISOString()
+      }).eq('id', existingBid.id);
+    } else {
+      await supabase.from('bids').insert({
+        orderId,
+        deliveryGuyId: currentUser.id,
+        deliveryGuyName: currentUser.name,
+        proposedFee: amount
+      });
+    }
   };
 
-  const selectBidder = (orderId: string, bidId: string) => {
-    setOrders(prev => prev.map(order => {
-      if (order.id === orderId) {
-        const selectedBid = order.bids.find(b => b.id === bidId);
-        return { 
-          ...order, 
-          selectedBidId: bidId, 
-          deliveryGuyId: selectedBid?.deliveryGuyId,
-          status: OrderStatus.AWAITING_ESCROW 
-        };
-      }
-      return order;
-    }));
+  const selectBidder = async (orderId: string, bidId: string) => {
+    const order = orders.find(o => o.id === orderId);
+    const bid = order?.bids.find(b => b.id === bidId);
+    if (!bid) return;
+
+    await supabase.from('orders').update({
+      chosenBidId: bidId,
+      deliveryGuyId: bid.deliveryGuyId,
+      status: OrderStatus.AWAITING_ESCROW
+    }).eq('id', orderId);
   };
 
-  const payStoreEscrow = (orderId: string) => {
+  const payStoreEscrow = async (orderId: string) => {
     if (!currentUser) return;
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
     const selectedBid = order.bids.find(b => b.id === order.selectedBidId);
     const fee = selectedBid ? selectedBid.amount : order.deliveryFeeOffer;
 
-    if (currentUser.wallet.balance >= fee) {
-      updateWallet(currentUser.id, fee, 'OUT', `Escrow deposit for ${order.productName}`, fee);
-      setOrders(prev => prev.map(o => {
-        if (o.id === orderId) {
-          const updated = { ...o, storeEscrowPaid: true };
-          if (updated.deliveryEscrowPaid) updated.status = OrderStatus.READY_FOR_PICKUP;
-          return updated;
-        }
-        return o;
-      }));
-    } else {
-      alert("Insufficient store balance.");
-    }
+    if (!currentUser.wallet || currentUser.wallet.balance < fee) return alert("Insufficient balance or wallet not loaded.");
+
+    // Update Wallet
+    await supabase.from('wallets').update({
+      balance: currentUser.wallet.balance - fee,
+      escrow: currentUser.wallet.escrowHeld + fee,
+    }).eq('user_id', currentUser.id);
+
+    // Update Order
+    const newStatus = order.deliveryEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
+    await supabase.from('orders').update({ storeDeposited: true, status: newStatus }).eq('id', orderId);
   };
 
-  const payDeliveryEscrow = (orderId: string) => {
+  const payDeliveryEscrow = async (orderId: string) => {
     if (!currentUser) return;
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
-    if (currentUser.wallet.balance >= order.productPrice) {
-      updateWallet(currentUser.id, order.productPrice, 'OUT', `Product collateral for ${order.productName}`, order.productPrice);
-      setOrders(prev => prev.map(o => {
-        if (o.id === orderId) {
-          const updated = { ...o, deliveryEscrowPaid: true };
-          if (updated.storeEscrowPaid) updated.status = OrderStatus.READY_FOR_PICKUP;
-          return updated;
-        }
-        return o;
-      }));
-    } else {
-      alert("Insufficient rider balance.");
-    }
+
+    if (!currentUser.wallet || currentUser.wallet.balance < order.productPrice) return alert("Insufficient balance or wallet not loaded.");
+
+    // Update Wallet
+    await supabase.from('wallets').update({
+      balance: currentUser.wallet.balance - order.productPrice,
+      escrow: currentUser.wallet.escrowHeld + order.productPrice,
+    }).eq('user_id', currentUser.id);
+
+    // Update Order
+    const newStatus = order.storeEscrowPaid ? OrderStatus.READY_FOR_PICKUP : OrderStatus.AWAITING_ESCROW;
+    await supabase.from('orders').update({ riderDeposited: true, status: newStatus }).eq('id', orderId);
   };
 
-  const updateOrderStatus = (orderId: string, status: OrderStatus) => {
-    setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, status } : o)));
+  const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
+    await supabase.from('orders').update({ status }).eq('id', orderId);
     
     if (status === OrderStatus.COMPLETED) {
       const order = orders.find(o => o.id === orderId);
@@ -198,21 +233,49 @@ const App: React.FC = () => {
         const selectedBid = order.bids.find(b => b.id === order.selectedBidId);
         const fee = selectedBid ? selectedBid.amount : order.deliveryFeeOffer;
 
-        // Store receives the product price that the rider paid into escrow
-        updateWallet(order.storeId, order.productPrice, 'IN', `Product payment from rider for ${order.productName}`, -fee);
+        // Payout Logic (Note: In production, use RPC/Transactions for safety)
+        
+        // 1. Store: Receives Product Price (from Rider's escrow) + Gets Fee back from escrow (Wait, fee goes to rider. Store pays fee.)
+        // Correction: Store paid Fee into Escrow. Rider paid ProductPrice into Escrow.
+        // Store should receive ProductPrice.
+        // Rider should receive ProductPrice (collateral back) + Fee.
+        
+        // Fetch Store Wallet
+        const { data: storeWallet } = await supabase.from('wallets').select('*').eq('user_id', order.storeId).single();
+        if (storeWallet) {
+          await supabase.from('wallets').update({
+            balance: Number(storeWallet.balance) + order.productPrice,
+            escrow: Number(storeWallet.escrow) - fee // Release fee from escrow
+          }).eq('user_id', order.storeId);
+        }
 
-        // Rider receives their collateral (productPrice) back PLUS the delivery fee
+        // Fetch Rider Wallet
         if (order.deliveryGuyId) {
-          const totalRelease = fee + order.productPrice;
-          updateWallet(order.deliveryGuyId, totalRelease, 'IN', `Payout & collateral release for ${order.productName}`, -order.productPrice);
+          const { data: riderWallet } = await supabase.from('wallets').select('*').eq('user_id', order.deliveryGuyId).single();
+          if (riderWallet) {
+            await supabase.from('wallets').update({
+              balance: Number(riderWallet.balance) + order.productPrice + fee,
+              escrow: Number(riderWallet.escrow) - order.productPrice // Release collateral
+            }).eq('user_id', order.deliveryGuyId);
+          }
         }
       }
     }
   };
 
-  const submitReview = (orderId: string, targetUserId: string, rating: number, comment: string) => {
+  const submitReview = async (orderId: string, targetUserId: string, rating: number, comment: string) => {
     if (!currentUser) return;
     
+    // Save to Supabase
+    await supabase.from('reviews').insert({
+      orderId,
+      reviewerId: currentUser.id,
+      reviewerName: currentUser.name,
+      targetUserId,
+      rating,
+      comment
+    });
+
     const newReview: Review = {
       id: Math.random().toString(36).substr(2, 9),
       reviewerId: currentUser.id,
@@ -273,7 +336,7 @@ const App: React.FC = () => {
       <Navbar 
         role={currentUser.role} 
         onLogout={handleLogout}
-        wallet={currentUser.wallet} 
+        wallet={currentUser.wallet || { balance: 0, escrowHeld: 0, transactions: [] }}
         isDarkMode={isDarkMode}
         onToggleTheme={toggleTheme}
       />
@@ -292,6 +355,7 @@ const App: React.FC = () => {
           />
         ) : (
           <DeliveryPortal 
+            currentUser={currentUser}
             orders={orders} 
             users={users}
             onBid={placeBid} 

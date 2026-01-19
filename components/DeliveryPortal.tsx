@@ -4,6 +4,7 @@ import { Order, OrderStatus, User } from '../types';
 import ReviewSection from './ReviewSection';
 
 interface DeliveryPortalProps {
+  currentUser: User;
   orders: Order[];
   users: User[];
   onBid: (orderId: string, amount: number) => void;
@@ -13,7 +14,7 @@ interface DeliveryPortalProps {
   onReview: (orderId: string, targetId: string, rating: number, comment: string) => void;
 }
 
-const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ orders, users, onBid, onPayEscrow, onUpdateStatus, onOpenChat, onReview }) => {
+const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ currentUser, orders, users, onBid, onPayEscrow, onUpdateStatus, onOpenChat, onReview }) => {
   const [bidAmounts, setBidAmounts] = useState<Record<string, string>>({});
 
   const handleBidSubmit = (orderId: string) => {
@@ -26,7 +27,7 @@ const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ orders, users, onBid, o
 
   const availableOrders = orders.filter(o => o.status === OrderStatus.BIDDING);
   const myActiveOrders = orders.filter(o => 
-    (o.deliveryGuyId === 'dg_user' || o.bids.some(b => b.deliveryGuyId === 'dg_user' || b.deliveryGuyId?.includes('u_rider'))) &&
+    (o.deliveryGuyId === currentUser.id || o.bids.some(b => b.deliveryGuyId === currentUser.id)) &&
     o.status !== OrderStatus.BIDDING
   );
 
@@ -190,6 +191,7 @@ const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ orders, users, onBid, o
              const storeRating = storeUser && storeUser.reviews.length > 0 
               ? (storeUser.reviews.reduce((acc, r) => acc + r.rating, 0) / storeUser.reviews.length).toFixed(1)
               : 'New';
+             const myBid = order.bids.find(b => b.deliveryGuyId === currentUser.id);
 
              return (
               <div key={order.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-2xl transition-all duration-500 flex flex-col group overflow-hidden">
@@ -238,7 +240,7 @@ const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ orders, users, onBid, o
                         <input
                           type="number"
                           step="0.01"
-                          value={bidAmounts[order.id] || ''}
+                          value={bidAmounts[order.id] !== undefined ? bidAmounts[order.id] : (myBid ? myBid.amount.toString() : '')}
                           onChange={(e) => setBidAmounts({ ...bidAmounts, [order.id]: e.target.value })}
                           placeholder="Offer fee"
                           className="w-full pl-8 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white transition-all"
@@ -248,7 +250,7 @@ const DeliveryPortal: React.FC<DeliveryPortalProps> = ({ orders, users, onBid, o
                         onClick={() => handleBidSubmit(order.id)}
                         className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-black hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 dark:shadow-indigo-900/30 active:scale-95 whitespace-nowrap"
                       >
-                        Bid
+                        {myBid ? 'Update Bid' : 'Bid'}
                       </button>
                     </div>
                     {order.bids.length > 0 && (
